@@ -10,13 +10,15 @@ A unified application that monitors system events and automatically adjusts secu
 
 ## Quick Start (Kali Linux)
 ```bash
-# Make launcher executable
-chmod +x run_dps.sh
+# 1. Install dependencies
+sudo chmod +x install_simple.sh
+sudo ./install_simple.sh
 
-# Run with full privileges
+# 2. Run the application
+sudo chmod +x run_dps.sh
 sudo ./run_dps.sh
 
-# Open browser to: http://localhost:8080
+# 3. Open browser to: http://localhost:8080
 ```
 
 ## Features

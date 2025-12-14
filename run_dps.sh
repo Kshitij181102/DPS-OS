@@ -11,12 +11,17 @@ if [ "$EUID" -ne 0 ]; then
     exec sudo "$0" "$@"
 fi
 
-# Install dependencies if needed
+# Check if dependencies are installed
 if ! python3 -c "import flask, pyudev, psutil" 2>/dev/null; then
-    echo "📦 Installing required packages..."
-    apt update
-    apt install -y python3-pip python3-dev libudev-dev
-    pip3 install -r requirements_app.txt
+    echo "❌ Dependencies not installed!"
+    echo "📦 Please run the installation script first:"
+    echo "   sudo chmod +x install_dependencies.sh"
+    echo "   sudo ./install_dependencies.sh"
+    echo ""
+    echo "Or for quick install on Kali Linux:"
+    echo "   sudo chmod +x install_simple.sh" 
+    echo "   sudo ./install_simple.sh"
+    exit 1
 fi
 
 # Create necessary directories
