@@ -1,23 +1,30 @@
-# DPS-OS — Dynamic Privacy-Shifting OS (Starter Repo)
+# DPS-OS — Dynamic Privacy-Shifting OS
 
-This repo is a working prototype of DPS-OS: an OS-level privacy transition engine.
+A unified application that monitors system events and automatically adjusts security postures with real-time web dashboard.
 
 ## What you'll find
-- `daemon/` : Prototype daemon and rule engine (Python)
-- `agents/`: Example action agents (clipboard lock, vpn toggler)
-- `watchers/`: Event watchers (udev + browser native host)
-- `ext/browser/`: Browser extension that notifies native host on URL changes
-- `ui/webapp/`: React UI to manage zones and rules
-- `system/`: systemd service & installer
-- `schema/`: Sample rule JSON + JSON Schema
+- `dps_app.py` : Unified monitoring application with web dashboard
+- `schema/` : Rule configuration (JSON format)
+- `run_dps.sh` : Simple launcher script
+- `requirements_app.txt` : Python dependencies
 
-## Quick start (Linux prototype)
-1. Install dependencies: `sudo apt update && sudo apt install python3 python3-venv python3-pip network-manager`.
-2. Create virtualenv: `python3 -m venv .venv && source .venv/bin/activate`
-3. Install Python deps: `pip install pyudev watchdog jsonschema psutil`.
-4. Start daemon (dev): `python daemon/daemon.py --db daemon/config.sqlite`
-5. Start udev watcher: `python watchers/udevWatcher.py --sock /var/run/dpsos.sock`
-6. Install browser extension locally (load unpacked) and register the native messaging host (see `watchers/nativeHostBrowser.py`).
+## Quick Start (Kali Linux)
+```bash
+# Make launcher executable
+chmod +x run_dps.sh
+
+# Run with full privileges
+sudo ./run_dps.sh
+
+# Open browser to: http://localhost:8080
+```
+
+## Features
+- **Real-time Monitoring**: USB devices, processes, network connections
+- **Web Dashboard**: Live monitoring interface at localhost:8080
+- **Automatic Actions**: VPN activation, clipboard locking, filesystem remounting
+- **Security Zones**: Normal → Sensitive → Ultra transitions
+- **Built-in Testing**: Simulate events via dashboard buttons
 
 ## Notes
-This is a prototype. Remounting filesystems or toggling networks require root. Use VMs for testing.
+Requires root privileges for full system monitoring. Use VMs for testing.
