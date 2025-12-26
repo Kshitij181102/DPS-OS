@@ -1,5 +1,11 @@
+# Core dependencies (cross-platform)
 flask>=2.3.0
-pyudev>=0.24.0
 psutil>=5.9.0
-watchdog>=3.0.0
-jsonschema>=4.17.0
+
+# Linux-specific dependencies
+# Install only on Linux systems:
+# pip install pyudev>=0.24.0
+
+# Windows-specific dependencies  
+# Install only on Windows systems:
+# pip install wmi>=1.5.1

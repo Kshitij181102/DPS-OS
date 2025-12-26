@@ -1,7 +1,7 @@
 #!/bin/bash
-# Simple DPS-OS Installation Script for Kali Linux
+# Simple DPS-OS Installation Script for Linux
 
-echo "🛡️  Installing DPS-OS Dependencies..."
+echo "🛡️  Installing DPS-OS Dependencies for Linux..."
 
 # Update system
 apt update
@@ -10,7 +10,7 @@ apt update
 apt install -y python3 python3-pip python3-dev build-essential libudev-dev network-manager wmctrl xsel libnotify-bin netcat-openbsd
 
 # Install Python packages
-pip3 install flask pyudev psutil watchdog jsonschema
+pip3 install -r requirements_linux.txt
 
 # Create directories
 mkdir -p /var/run/dpsos /var/log/dpsos templates

@@ -11,13 +11,34 @@ import json
 import time
 import threading
 import subprocess
-import sqlite3
+import platform
 from datetime import datetime
 from flask import Flask, render_template, jsonify, request
 from werkzeug.serving import make_server
-import pyudev
 import psutil
 import signal
+
+# Platform-specific imports
+IS_WINDOWS = platform.system() == 'Windows'
+IS_LINUX = platform.system() == 'Linux'
+
+if IS_LINUX:
+    try:
+        import pyudev
+        PYUDEV_AVAILABLE = True
+    except ImportError:
+        PYUDEV_AVAILABLE = False
+        print("Warning: pyudev not available. USB monitoring will be limited.")
+else:
+    PYUDEV_AVAILABLE = False
+
+if IS_WINDOWS:
+    try:
+        import wmi
+        WMI_AVAILABLE = True
+    except ImportError:
+        WMI_AVAILABLE = False
+        print("Warning: wmi not available. Some Windows features will be limited.")
 
 class DPSMonitor:
     def __init__(self):
@@ -127,37 +148,77 @@ class DPSMonitor:
     def enable_vpn(self):
         """Enable VPN connection"""
         try:
-            result = subprocess.run(['nmcli', 'connection', 'up', 'dps-vpn'], 
-                                  capture_output=True, text=True, timeout=10)
-            return "VPN enabled" if result.returncode == 0 else f"VPN failed: {result.stderr}"
+            if IS_LINUX:
+                result = subprocess.run(['nmcli', 'connection', 'up', 'dps-vpn'], 
+                                      capture_output=True, text=True, timeout=10)
+                return "VPN enabled" if result.returncode == 0 else f"VPN failed: {result.stderr}"
+            elif IS_WINDOWS:
+                # Windows VPN control would require different approach
+                return "VPN control not implemented for Windows"
+            else:
+                return "VPN control not available on this platform"
         except Exception as e:
             return f"VPN error: {str(e)}"
     
     def lock_clipboard(self):
         """Lock clipboard by clearing it"""
         try:
-            subprocess.run(['xsel', '--clear'], check=False)
-            return "Clipboard locked"
-        except:
-            return "Clipboard lock failed"
+            if IS_LINUX:
+                subprocess.run(['xsel', '--clear'], check=False)
+                return "Clipboard locked (Linux)"
+            elif IS_WINDOWS:
+                # Windows clipboard clearing
+                import win32clipboard
+                win32clipboard.OpenClipboard()
+                win32clipboard.EmptyClipboard()
+                win32clipboard.CloseClipboard()
+                return "Clipboard locked (Windows)"
+            else:
+                return "Clipboard lock not available"
+        except ImportError:
+            # Fallback for Windows without pywin32
+            try:
+                import subprocess
+                subprocess.run(['powershell', '-command', 'Set-Clipboard', '-Value', '""'], 
+                              check=False, capture_output=True)
+                return "Clipboard locked (PowerShell)"
+            except:
+                return "Clipboard lock failed"
+        except Exception as e:
+            return f"Clipboard lock error: {str(e)}"
     
     def remount_home_ro(self):
         """Remount home directory as read-only"""
         try:
-            result = subprocess.run(['mount', '-o', 'remount,ro', '/home'], 
-                                  capture_output=True, text=True)
-            return "Home remounted RO" if result.returncode == 0 else "Remount failed"
+            if IS_LINUX:
+                result = subprocess.run(['mount', '-o', 'remount,ro', '/home'], 
+                                      capture_output=True, text=True)
+                return "Home remounted RO" if result.returncode == 0 else "Remount failed"
+            elif IS_WINDOWS:
+                return "Filesystem remounting not applicable on Windows"
+            else:
+                return "Filesystem remounting not available"
         except Exception as e:
             return f"Remount error: {str(e)}"
     
     def notify_user(self):
         """Send desktop notification"""
         try:
-            subprocess.run(['notify-send', 'DPS-OS', 'Security zone transition detected'], 
-                          check=False)
-            return "User notified"
-        except:
-            return "Notification sent"
+            if IS_LINUX:
+                subprocess.run(['notify-send', 'DPS-OS', 'Security zone transition detected'], 
+                              check=False)
+                return "User notified (Linux)"
+            elif IS_WINDOWS:
+                # Windows notification using PowerShell
+                subprocess.run([
+                    'powershell', '-command',
+                    'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show("Security zone transition detected", "DPS-OS")'
+                ], check=False, capture_output=True)
+                return "User notified (Windows)"
+            else:
+                return "Notification sent (fallback)"
+        except Exception as e:
+            return f"Notification error: {str(e)}"
     
     def transition_zone(self, new_zone, reason):
         """Transition to new security zone"""
@@ -173,12 +234,26 @@ class DPSMonitor:
 class USBMonitor:
     def __init__(self, dps_monitor):
         self.dps_monitor = dps_monitor
-        self.context = pyudev.Context()
-        self.monitor = pyudev.Monitor.from_netlink(self.context)
-        self.monitor.filter_by('block')
+        self.platform = platform.system()
+        
+        if IS_LINUX and PYUDEV_AVAILABLE:
+            self.context = pyudev.Context()
+            self.monitor = pyudev.Monitor.from_netlink(self.context)
+            self.monitor.filter_by('block')
+        elif IS_WINDOWS and WMI_AVAILABLE:
+            self.wmi_conn = wmi.WMI()
         
     def start_monitoring(self):
         """Start USB device monitoring"""
+        if IS_LINUX and PYUDEV_AVAILABLE:
+            return self._start_linux_monitoring()
+        elif IS_WINDOWS:
+            return self._start_windows_monitoring()
+        else:
+            return self._start_fallback_monitoring()
+    
+    def _start_linux_monitoring(self):
+        """Linux USB monitoring using pyudev"""
         def monitor_usb():
             for device in iter(self.monitor.poll, None):
                 if not self.dps_monitor.running:
@@ -188,7 +263,8 @@ class USBMonitor:
                     device_info = {
                         "sysName": device.sys_name,
                         "devNode": device.device_node,
-                        "deviceClass": "mass_storage"
+                        "deviceClass": "mass_storage",
+                        "platform": "linux"
                     }
                     
                     self.dps_monitor.add_event("usb_plugged", device_info)
@@ -203,14 +279,111 @@ class USBMonitor:
         thread = threading.Thread(target=monitor_usb, daemon=True)
         thread.start()
         return thread
+    
+    def _start_windows_monitoring(self):
+        """Windows USB monitoring using WMI or psutil fallback"""
+        def monitor_usb():
+            seen_drives = set()
+            # Get initial drives
+            for partition in psutil.disk_partitions():
+                if 'removable' in partition.opts:
+                    seen_drives.add(partition.device)
+            
+            while self.dps_monitor.running:
+                try:
+                    current_drives = set()
+                    for partition in psutil.disk_partitions():
+                        if 'removable' in partition.opts:
+                            current_drives.add(partition.device)
+                    
+                    new_drives = current_drives - seen_drives
+                    for drive in new_drives:
+                        device_info = {
+                            "device": drive,
+                            "deviceClass": "mass_storage",
+                            "platform": "windows"
+                        }
+                        
+                        self.dps_monitor.add_event("usb_plugged", device_info)
+                        
+                        # Evaluate rules
+                        edge = self.dps_monitor.evaluate_rules("usbPlugged", device_info)
+                        if edge:
+                            actions = self.dps_monitor.execute_actions(edge.get('actions', []))
+                            self.dps_monitor.transition_zone(edge['to'], f"USB device: {drive}")
+                            self.dps_monitor.add_event("rule_triggered", edge, actions)
+                    
+                    seen_drives = current_drives
+                    time.sleep(2)  # Check every 2 seconds
+                    
+                except Exception as e:
+                    print(f"USB monitoring error: {e}")
+                    time.sleep(5)
+        
+        thread = threading.Thread(target=monitor_usb, daemon=True)
+        thread.start()
+        return thread
+    
+    def _start_fallback_monitoring(self):
+        """Fallback monitoring using psutil only"""
+        def monitor_usb():
+            print("USB monitoring: Using fallback mode (limited functionality)")
+            seen_drives = set()
+            
+            while self.dps_monitor.running:
+                try:
+                    current_drives = set()
+                    for partition in psutil.disk_partitions():
+                        if 'removable' in partition.opts:
+                            current_drives.add(partition.device)
+                    
+                    new_drives = current_drives - seen_drives
+                    for drive in new_drives:
+                        device_info = {
+                            "device": drive,
+                            "deviceClass": "mass_storage",
+                            "platform": "fallback"
+                        }
+                        
+                        self.dps_monitor.add_event("usb_plugged", device_info)
+                    
+                    seen_drives = current_drives
+                    time.sleep(3)  # Check every 3 seconds
+                    
+                except Exception as e:
+                    print(f"USB monitoring error: {e}")
+                    time.sleep(5)
+        
+        thread = threading.Thread(target=monitor_usb, daemon=True)
+        thread.start()
+        return thread
 
 class ProcessMonitor:
     def __init__(self, dps_monitor):
         self.dps_monitor = dps_monitor
-        self.sensitive_processes = [
+        
+        # Cross-platform sensitive processes
+        base_processes = [
             'firefox', 'chrome', 'chromium', 'tor', 'wireshark', 
             'nmap', 'metasploit', 'burpsuite', 'sqlmap'
         ]
+        
+        # Windows-specific processes
+        windows_processes = [
+            'firefox.exe', 'chrome.exe', 'msedge.exe', 'iexplore.exe',
+            'powershell.exe', 'cmd.exe', 'wireshark.exe', 'nmap.exe'
+        ]
+        
+        # Linux-specific processes  
+        linux_processes = [
+            'firefox', 'chromium-browser', 'google-chrome', 'tor-browser',
+            'wireshark', 'nmap', 'metasploit', 'burpsuite'
+        ]
+        
+        if IS_WINDOWS:
+            self.sensitive_processes = base_processes + windows_processes
+        else:
+            self.sensitive_processes = base_processes + linux_processes
         
     def start_monitoring(self):
         """Monitor running processes"""
@@ -220,15 +393,24 @@ class ProcessMonitor:
                 try:
                     for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
                         proc_name = proc.info['name'].lower()
-                        if proc_name in self.sensitive_processes:
+                        
+                        # Check if process name matches any sensitive process
+                        is_sensitive = any(sensitive in proc_name for sensitive in self.sensitive_processes)
+                        
+                        if is_sensitive:
                             proc_id = f"{proc.info['pid']}_{proc_name}"
                             if proc_id not in seen_processes:
                                 seen_processes.add(proc_id)
                                 self.dps_monitor.add_event("sensitive_process", {
                                     "name": proc_name,
                                     "pid": proc.info['pid'],
-                                    "cmdline": ' '.join(proc.info['cmdline'] or [])
+                                    "cmdline": ' '.join(proc.info['cmdline'] or []),
+                                    "platform": platform.system()
                                 })
+                                
+                                # Trigger zone transition for sensitive processes
+                                self.dps_monitor.transition_zone("zone2", f"Sensitive process: {proc_name}")
+                                
                     time.sleep(5)
                 except Exception as e:
                     print(f"Process monitoring error: {e}")
@@ -275,7 +457,7 @@ dps_monitor = DPSMonitor()
 
 @app.route('/')
 def dashboard():
-    return render_template('dashboard.html')
+    return render_template('dashboard.html', platform=platform.system())
 
 @app.route('/api/status')
 def api_status():
@@ -541,17 +723,23 @@ def create_html_template():
 </body>
 </html>'''
     
-    with open('templates/dashboard.html', 'w') as f:
+    with open('templates/dashboard.html', 'w', encoding='utf-8') as f:
         f.write(html_content)
 
 def main():
     """Main application entry point"""
     print("🛡️  DPS-OS Unified Monitor Starting...")
     
-    # Check if running as root
-    if os.geteuid() != 0:
-        print("⚠️  Warning: Not running as root. Some features may not work.")
-        print("   Run with: sudo python3 dps_app.py")
+    # Check if running with appropriate privileges
+    if IS_LINUX:
+        if os.geteuid() != 0:
+            print("⚠️  Warning: Not running as root. Some features may not work.")
+            print("   Run with: sudo python3 dps_app.py")
+    elif IS_WINDOWS:
+        import ctypes
+        if not ctypes.windll.shell32.IsUserAnAdmin():
+            print("⚠️  Warning: Not running as Administrator. Some features may not work.")
+            print("   Run Command Prompt as Administrator and try again.")
     
     # Create HTML template
     create_html_template()
@@ -580,15 +768,32 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
-    # Start web server
-    print("🌐 Starting web dashboard on http://localhost:8080")
-    print("📊 Open your browser to view the monitoring dashboard")
-    print("🔧 Use Ctrl+C to stop")
+    # Start web server with fallback ports
+    ports_to_try = [5000, 5001, 8081, 8082, 3000]
+    server_started = False
     
-    try:
-        app.run(host='0.0.0.0', port=8080, debug=False, threaded=True)
-    except Exception as e:
-        print(f"❌ Error starting web server: {e}")
+    for port in ports_to_try:
+        try:
+            print(f"🌐 Trying to start web dashboard on http://localhost:{port}")
+            print("📊 Open your browser to view the monitoring dashboard")
+            print("🔧 Use Ctrl+C to stop")
+            app.run(host='127.0.0.1', port=port, debug=False, threaded=True)
+            server_started = True
+            break
+        except OSError as e:
+            if "Address already in use" in str(e) or "access" in str(e).lower():
+                print(f"⚠️  Port {port} is not available, trying next port...")
+                continue
+            else:
+                print(f"❌ Error starting web server on port {port}: {e}")
+                continue
+        except Exception as e:
+            print(f"❌ Unexpected error starting web server on port {port}: {e}")
+            continue
+    
+    if not server_started:
+        print("❌ Could not start web server on any available port")
+        print("💡 Try running as Administrator or check firewall settings")
         sys.exit(1)
 
 if __name__ == '__main__':

@@ -3,14 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DPS-OS Monitor (Windows)</title>
+    <title>DPS-OS Monitor</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a1a; color: #fff; }
         .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
         .header { text-align: center; margin-bottom: 30px; }
         .header h1 { color: #00ff88; font-size: 2.5em; margin-bottom: 10px; }
-        .platform-badge { background: #0078d4; color: white; padding: 5px 15px; border-radius: 15px; font-size: 0.9em; }
         .status-bar { display: flex; justify-content: space-between; background: #2a2a2a; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
         .zone-indicator { padding: 10px 20px; border-radius: 5px; font-weight: bold; }
         .zone-normal { background: #28a745; }
@@ -27,8 +26,8 @@
         .event-type { color: #00ff88; font-weight: bold; }
         .event-data { color: #ccc; margin-top: 5px; }
         .controls { background: #2a2a2a; padding: 20px; border-radius: 8px; }
-        .btn { background: #0078d4; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; margin: 5px; }
-        .btn:hover { background: #106ebe; }
+        .btn { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; margin: 5px; }
+        .btn:hover { background: #0056b3; }
         .btn-danger { background: #dc3545; }
         .btn-danger:hover { background: #c82333; }
         .system-info { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-top: 15px; }
@@ -39,9 +38,8 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>DPS-OS Monitor</h1>
+            <h1>🛡️ DPS-OS Monitor</h1>
             <p>Dynamic Privacy-Shifting Operating System</p>
-            <div class="platform-badge">Windows Edition</div>
         </div>
         
         <div class="status-bar">
@@ -53,7 +51,7 @@
                 <strong>Uptime:</strong> <span id="uptime">0s</span>
             </div>
             <div>
-                <strong>Status:</strong> <span style="color: #00ff88;">Active</span>
+                <strong>Status:</strong> <span style="color: #00ff88;">● Active</span>
             </div>
         </div>
         
@@ -88,7 +86,7 @@
                 <div id="memory-percent">0%</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Disk Usage (C:)</div>
+                <div class="stat-label">Disk Usage</div>
                 <div class="progress-bar">
                     <div class="progress-fill" id="disk-progress"></div>
                 </div>
@@ -105,10 +103,9 @@
         </div>
         
         <div class="controls">
-            <h3>Test Controls (Windows)</h3>
+            <h3>Test Controls</h3>
             <button class="btn" onclick="simulateUSB()">Simulate USB Event</button>
             <button class="btn" onclick="simulateURL()">Simulate Banking URL</button>
-            <button class="btn" onclick="simulateProcess()">Simulate Sensitive Process</button>
             <button class="btn btn-danger" onclick="clearEvents()">Clear Events</button>
         </div>
     </div>
@@ -173,7 +170,7 @@
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
                     type: 'usb',
-                    data: {driveLetter: 'E:', deviceClass: 'mass_storage'}
+                    data: {sysName: 'test_usb', deviceClass: 'mass_storage'}
                 })
             }).then(() => {
                 setTimeout(refreshEvents, 500);
@@ -195,22 +192,9 @@
             });
         }
         
-        function simulateProcess() {
-            fetch('/api/simulate_event', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    type: 'process',
-                    data: {name: 'chrome.exe', pid: 1234}
-                })
-            }).then(() => {
-                setTimeout(refreshEvents, 500);
-                setTimeout(updateStatus, 500);
-            });
-        }
-        
         function clearEvents() {
             if (confirm('Clear all events?')) {
+                // This would need a backend endpoint
                 location.reload();
             }
         }
