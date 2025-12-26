@@ -1,171 +1,267 @@
 # DPS-OS — Dynamic Privacy-Shifting OS
 
-A unified application that monitors system events and automatically adjusts security postures with real-time web dashboard.
+A cross-platform security monitoring system that automatically adjusts security postures based on detected threats. Features real-time USB monitoring, clipboard protection, financial website detection, and a web-based dashboard.
 
-## Project Structure
+## 🌟 Features
+
+- **🔒 USB Security**: Automatic Ultra mode when USB devices are detected
+- **📋 Clipboard Protection**: Continuous clipboard clearing in high-security zones
+- **🏦 Financial Website Detection**: Enhanced detection of banking and financial sites
+- **🖥️ Cross-Platform**: Works on Windows, Linux, and macOS
+- **📊 Real-Time Dashboard**: Web interface for monitoring and control
+- **⚙️ Configurable**: JSON-based configuration for easy customization
+- **🔄 Zone-Based Security**: Normal → Sensitive → Ultra security transitions
+
+## 🚀 Quick Start
+
+### 1. Installation
+
+**Automatic (Recommended):**
+```bash
+python install.py
+```
+
+**Manual Installation:**
+
+**Windows:**
+```cmd
+pip install flask psutil wmi
+```
+
+**Linux (Ubuntu/Debian/Kali):**
+```bash
+sudo apt update
+sudo apt install python3-pip python3-dev libudev-dev build-essential libnotify-bin
+pip3 install flask psutil pyudev
+```
+
+**macOS:**
+```bash
+pip3 install flask psutil
+```
+
+### 2. Configuration
+
+Edit `config.json` to customize behavior:
+- Security zones and colors
+- Monitoring intervals
+- Financial keywords for URL detection
+- Security actions and commands
+- Dashboard settings
+
+### 3. Run the Application
+
+```bash
+python dps_app.py
+```
+
+Then open your browser to: **http://localhost:5000**
+
+## 📁 Project Structure
+
 ```
 dps-os/
-├── dps_app.py                  # Main unified application
-├── run_dps.sh                  # Linux launcher script  
-├── install_simple.sh           # Linux dependency installer
-├── install_windows.bat         # Windows dependency installer
-├── requirements_app.txt        # Core dependencies (cross-platform)
-├── requirements_linux.txt      # Linux-specific dependencies
-├── requirements_windows.txt    # Windows-specific dependencies
-├── schema/
-│   └── ruleSchema.json         # Security rules configuration
+├── dps_app.py              # Main application
+├── config.json             # Configuration file
+├── install.py              # Cross-platform installer
+├── requirements_windows.txt # Windows dependencies
 ├── templates/
-│   └── dashboard.html          # Web dashboard template
-├── README.md                   # This file
-└── LICENSE                     # MIT License
+│   └── dashboard.html      # Web dashboard
+├── README.md               # This file
+└── LICENSE                 # MIT License
 ```
 
-## Quick Start
+## ⚙️ Configuration
 
-### Linux (Kali/Ubuntu/Debian)
-```bash
-# Method 1: Use installer script (recommended)
-sudo chmod +x install_simple.sh
-sudo ./install_simple.sh
+The `config.json` file controls all aspects of DPS-OS behavior:
 
-# Method 2: Manual installation
-sudo apt install python3-pip python3-dev libudev-dev
-pip3 install -r requirements_linux.txt
-
-# Run the application
-sudo chmod +x run_dps.sh
-sudo ./run_dps.sh
-
-# Open browser to: http://localhost:8080
+### System Settings
+```json
+{
+  "system": {
+    "web_port": 5000,
+    "max_events": 1000,
+    "debug_mode": false
+  }
+}
 ```
+
+### Security Zones
+```json
+{
+  "security_zones": {
+    "zone1": {"name": "Normal", "color": "green"},
+    "zone2": {"name": "Sensitive", "color": "orange"},
+    "zone3": {"name": "Ultra", "color": "red"}
+  }
+}
+```
+
+### USB Monitoring
+```json
+{
+  "usb_monitoring": {
+    "enabled": true,
+    "auto_ultra_mode": true,
+    "persistent_lock": true,
+    "actions_on_connect": ["lockClipboard", "notifyUser"]
+  }
+}
+```
+
+### Financial URL Detection
+```json
+{
+  "url_monitoring": {
+    "enabled": true,
+    "financial_keywords": ["bank", "paypal", "crypto", "trading"],
+    "monitored_browsers": ["chrome.exe", "firefox.exe"]
+  }
+}
+```
+
+## 🔧 Platform-Specific Features
 
 ### Windows
-```cmd
-# Method 1: Use installer script (recommended)
-install_windows.bat
-
-# Method 2: Manual installation
-pip install -r requirements_windows.txt
-
-# Run application (as Administrator for full functionality)
-python dps_app.py
-
-# Open browser to: http://localhost:8080
-```
-
-### Cross-Platform (Core Features Only)
-```bash
-# Install minimal dependencies (limited functionality)
-pip install -r requirements_app.txt
-
-# Run application
-python dps_app.py
-```
-
-## Features
-- **Real-time Monitoring**: USB devices, processes, network connections
-- **Web Dashboard**: Live monitoring interface at localhost:8080
-- **Automatic Actions**: VPN activation, clipboard locking, filesystem remounting
-- **Security Zones**: Normal → Sensitive → Ultra transitions
-- **Built-in Testing**: Simulate events via dashboard buttons
-- **Cross-Platform**: Works on Linux and Windows (with platform-specific features)
-
-## Platform Support
-
-### Linux Features (Full Functionality)
-- USB device monitoring via udev
-- Process monitoring
-- Network connection tracking
-- VPN control via NetworkManager
-- Filesystem remounting
-- Desktop notifications
-
-### Windows Features (Core Functionality)
-- Process monitoring
-- Network connection tracking
-- Basic USB detection
-- Clipboard management
-- System notifications
-
-### Cross-Platform Features
-- Web dashboard
-- Security zone transitions
-- Event logging
-- Manual testing controls
-
-## Usage
-
-### Dashboard Features
-- **Current Security Zone**: Normal → Sensitive → Ultra
-- **Real-time Statistics**: Events processed, zone transitions, actions executed
-- **System Monitoring**: CPU, Memory, Disk usage
-- **Live Event Feed**: All detected events with timestamps
-- **Test Controls**: Simulate USB and URL events
-
-### Testing the System
-1. **Built-in Test Buttons**: Use dashboard buttons to simulate events
-2. **Real Hardware**: Plug in USB drives, open browsers
-3. **Manual Testing**: Use curl commands to trigger events
-
-### Expected Behavior
-- **USB Device**: Plug in USB → Zone transitions to "Ultra" (red)
-- **Sensitive Process**: Open browser → Zone transitions to "Sensitive" (orange)
-- **Banking URL**: Visit banking sites → Triggers VPN activation
-
-## Customization
-
-### Modify Security Rules
-Edit `schema/ruleSchema.json` to change:
-- Zone transition conditions
-- Actions to execute
-- Priority levels
-
-### Add New Processes
-Edit `dps_app.py` to monitor additional processes or events.
-
-## Security Notes
-- Requires root/admin privileges for full functionality
-- Use VMs for testing
-- Some actions (filesystem remounting) can affect running applications
-
-## Troubleshooting
+- Process monitoring via WMI
+- PowerShell-based clipboard control
+- Windows notification system
+- USB detection via psutil
 
 ### Linux
+- Enhanced USB monitoring via pyudev
+- NetworkManager VPN control
+- Desktop notifications via notify-send
+- Filesystem remounting capabilities
+
+### macOS
+- Native clipboard control via pbcopy
+- AppleScript notifications
+- Process monitoring via psutil
+
+## 🛡️ Security Zones
+
+### Normal Zone (Green)
+- Default state
+- Basic monitoring active
+- No restrictions
+
+### Sensitive Zone (Orange)
+- Triggered by financial websites
+- Enhanced monitoring
+- VPN activation
+- Clipboard protection
+
+### Ultra Zone (Red)
+- Triggered by USB devices
+- Maximum security
+- Persistent until USB removed
+- Continuous clipboard clearing
+- All security measures active
+
+## 🧪 Testing
+
+### Built-in Test Controls
+Use the dashboard buttons to test:
+1. **Simulate USB Event** - Triggers Ultra mode
+2. **Simulate Banking URL** - Triggers Sensitive mode
+
+### Manual Testing
 ```bash
-# Install missing system dependencies
-sudo apt update
-sudo apt install python3-pip python3-dev libudev-dev build-essential
+# Test USB simulation
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"type":"usb","data":{"device":"test_usb"}}' \
+  http://localhost:5000/api/simulate_event
 
-# Install Python dependencies
-pip3 install -r requirements_linux.txt
-
-# For NetworkManager VPN support
-sudo apt install network-manager openvpn
+# Test bank URL simulation  
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"type":"url","data":{"url":"https://chase.com/login"}}' \
+  http://localhost:5000/api/simulate_event
 ```
 
-### Windows
-```cmd
-# Install Python dependencies
-pip install -r requirements_windows.txt
+## 🔍 Monitoring
 
-# For WMI support (system monitoring)
-pip install wmi
+### What Gets Monitored
+- **USB Devices**: Removable storage detection
+- **Processes**: Browsers and sensitive applications
+- **Network**: New connections and traffic
+- **URLs**: Financial and banking websites
+- **System**: CPU, memory, disk usage
 
-# Run as Administrator for full functionality
-```
+### Event Types
+- `usb_plugged` / `usb_removed`
+- `bank_url_detected`
+- `sensitive_process`
+- `network_connection`
+- `zone_transition`
+- `security_lockdown` / `security_unlock`
+
+## 🚨 Troubleshooting
 
 ### Common Issues
-- **Permission Errors**: 
-  - Linux: Ensure running with `sudo`
-  - Windows: Run Command Prompt as Administrator
-- **Dashboard Not Loading**: Check if port 8080 is available
-- **No Events Detected**: Verify hardware events are occurring
-- **Import Errors**: 
-  - Linux: Install `python3-dev` and `libudev-dev`
-  - Windows: Install Visual C++ Build Tools if needed
 
-### Dependencies Explained
-- **flask**: Web dashboard framework
-- **psutil**: Cross-platform system monitoring
-- **pyudev** (Linux only): USB device monitoring
-- **wmi** (Windows only): Windows Management Instrumentation
+**Port Already in Use:**
+- Change `web_port` in config.json
+- Default tries ports: 5000, 5001, 8081, 8082, 3000
+
+**Permission Errors:**
+- **Windows**: Run Command Prompt as Administrator
+- **Linux**: Run with `sudo python3 dps_app.py`
+- **macOS**: Grant necessary permissions in System Preferences
+
+**Dependencies Missing:**
+```bash
+# Reinstall dependencies
+python install.py
+
+# Or manually:
+pip install flask psutil
+```
+
+**USB Monitoring Not Working:**
+- **Linux**: Install pyudev: `pip3 install pyudev`
+- **Windows**: Install WMI: `pip install wmi`
+- Check if running with admin/root privileges
+
+### Debug Mode
+Enable debug mode in config.json:
+```json
+{
+  "system": {
+    "debug_mode": true
+  }
+}
+```
+
+## 🔒 Security Notes
+
+### Privileges Required
+- **Windows**: Administrator rights for full functionality
+- **Linux**: Root access for USB monitoring and filesystem operations
+- **macOS**: Standard user with notification permissions
+
+### Safe Testing
+- Use virtual machines for testing
+- Take system snapshots before testing
+- Some actions (filesystem remounting) can affect running applications
+- Test in isolated environments first
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test on multiple platforms
+5. Submit a pull request
+
+## 📄 License
+
+MIT License - see LICENSE file for details.
+
+## 🆘 Support
+
+For issues and questions:
+1. Check the troubleshooting section
+2. Review config.json settings
+3. Enable debug mode for detailed logging
+4. Check platform-specific requirements

@@ -1,0 +1,131 @@
+{
+  "_comment": "DPS-OS Configuration File - Modify settings to customize behavior",
+  
+  "system": {
+    "_comment": "System-wide settings",
+    "web_port": 5000,
+    "max_events": 1000,
+    "auto_start_monitoring": true,
+    "debug_mode": false
+  },
+  
+  "security_zones": {
+    "_comment": "Security zone definitions and colors",
+    "zone1": {
+      "name": "Normal",
+      "color": "green",
+      "description": "Default safe state"
+    },
+    "zone2": {
+      "name": "Sensitive", 
+      "color": "orange",
+      "description": "Financial/sensitive activity detected"
+    },
+    "zone3": {
+      "name": "Ultra",
+      "color": "red", 
+      "description": "USB device detected - maximum security"
+    }
+  },
+  
+  "usb_monitoring": {
+    "_comment": "USB device monitoring settings",
+    "enabled": true,
+    "auto_ultra_mode": true,
+    "persistent_lock": true,
+    "check_interval_seconds": 2,
+    "actions_on_connect": ["lockClipboard", "notifyUser"],
+    "actions_on_disconnect": ["unlockClipboard"]
+  },
+  
+  "clipboard_protection": {
+    "_comment": "Clipboard monitoring and protection",
+    "enabled": true,
+    "continuous_clear_in_ultra": true,
+    "clear_interval_seconds": 2,
+    "block_copy_paste": true
+  },
+  
+  "url_monitoring": {
+    "_comment": "Bank/financial URL detection settings",
+    "enabled": true,
+    "check_interval_seconds": 5,
+    "auto_sensitive_mode": true,
+    "actions_on_detection": ["enableVpn", "lockClipboard", "notifyUser"],
+    "financial_keywords": [
+      "bank", "banking", "finance", "financial", "payment", "payments",
+      "paypal", "visa", "mastercard", "amex", "discover", "chase", "wells",
+      "bofa", "citibank", "hsbc", "barclays", "santander", "credit",
+      "debit", "wallet", "venmo", "zelle", "cashapp", "stripe", "square",
+      "loan", "mortgage", "investment", "trading", "brokerage", "crypto",
+      "bitcoin", "coinbase", "binance", "robinhood", "etrade", "schwab",
+      "fidelity", "vanguard", "account", "secure", "login", "signin"
+    ],
+    "financial_domains": [".bank", ".finance", ".pay", ".money"],
+    "monitored_browsers": [
+      "chrome.exe", "firefox.exe", "msedge.exe", "iexplore.exe",
+      "chrome", "firefox", "chromium", "safari"
+    ]
+  },
+  
+  "process_monitoring": {
+    "_comment": "Process monitoring for sensitive applications",
+    "enabled": true,
+    "check_interval_seconds": 5,
+    "auto_sensitive_mode": true,
+    "sensitive_processes": {
+      "windows": [
+        "firefox.exe", "chrome.exe", "msedge.exe", "iexplore.exe",
+        "powershell.exe", "cmd.exe", "wireshark.exe", "nmap.exe"
+      ],
+      "linux": [
+        "firefox", "chromium-browser", "google-chrome", "tor-browser",
+        "wireshark", "nmap", "metasploit", "burpsuite"
+      ]
+    }
+  },
+  
+  "network_monitoring": {
+    "_comment": "Network connection monitoring",
+    "enabled": true,
+    "check_interval_seconds": 10,
+    "log_new_connections": true,
+    "monitor_established_only": true
+  },
+  
+  "security_actions": {
+    "_comment": "Available security actions and their platform support",
+    "vpn": {
+      "enabled": true,
+      "linux_command": ["nmcli", "connection", "up", "dps-vpn"],
+      "windows_command": "echo VPN control not implemented for Windows",
+      "timeout_seconds": 10
+    },
+    "clipboard": {
+      "enabled": true,
+      "linux_command": ["xsel", "--clear"],
+      "windows_powershell": "Set-Clipboard -Value ''",
+      "continuous_monitoring": true
+    },
+    "filesystem": {
+      "enabled": true,
+      "linux_remount_ro": ["mount", "-o", "remount,ro", "/home"],
+      "windows_note": "Filesystem remounting not applicable on Windows"
+    },
+    "notifications": {
+      "enabled": true,
+      "linux_command": ["notify-send", "DPS-OS", "Security zone transition detected"],
+      "windows_powershell": "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Security zone transition detected', 'DPS-OS')"
+    }
+  },
+  
+  "dashboard": {
+    "_comment": "Web dashboard settings",
+    "enabled": true,
+    "auto_refresh_seconds": 2,
+    "events_refresh_seconds": 5,
+    "max_displayed_events": 20,
+    "show_security_status": true,
+    "show_system_info": true
+  }
+}

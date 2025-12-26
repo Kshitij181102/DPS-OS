@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
 DPS-OS Unified Application
-A single application with full privileges that monitors system events
-and provides a web-based dashboard for real-time monitoring.
+A cross-platform application that monitors system events and automatically 
+adjusts security postures with real-time web dashboard.
+
+Supports: Windows, Linux, macOS
+Features: USB monitoring, clipboard protection, URL detection, process monitoring
 """
 
 import os
@@ -14,14 +17,15 @@ import subprocess
 import platform
 from datetime import datetime
 from flask import Flask, render_template, jsonify, request
-from werkzeug.serving import make_server
 import psutil
 import signal
 
-# Platform-specific imports
+# Platform detection
 IS_WINDOWS = platform.system() == 'Windows'
 IS_LINUX = platform.system() == 'Linux'
+IS_MACOS = platform.system() == 'Darwin'
 
+# Platform-specific imports
 if IS_LINUX:
     try:
         import pyudev
@@ -40,17 +44,81 @@ if IS_WINDOWS:
         WMI_AVAILABLE = False
         print("Warning: wmi not available. Some Windows features will be limited.")
 
+class ConfigManager:
+    """Manages configuration loading and validation"""
+    
+    def __init__(self, config_file='config.json'):
+        self.config_file = config_file
+        self.config = self.load_config()
+    
+    def load_config(self):
+        """Load configuration from JSON file with fallback defaults"""
+        try:
+            with open(self.config_file, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                print(f"✅ Configuration loaded from {self.config_file}")
+                return config
+        except FileNotFoundError:
+            print(f"⚠️  Config file {self.config_file} not found, using defaults")
+            return self.get_default_config()
+        except json.JSONDecodeError as e:
+            print(f"❌ Error parsing config file: {e}")
+            print("Using default configuration")
+            return self.get_default_config()
+    
+    def get_default_config(self):
+        """Return default configuration if file is missing"""
+        return {
+            "system": {"web_port": 5000, "max_events": 1000, "debug_mode": False},
+            "usb_monitoring": {"enabled": True, "auto_ultra_mode": True, "persistent_lock": True},
+            "clipboard_protection": {"enabled": True, "continuous_clear_in_ultra": True},
+            "url_monitoring": {"enabled": True, "auto_sensitive_mode": True},
+            "process_monitoring": {"enabled": True, "auto_sensitive_mode": True},
+            "network_monitoring": {"enabled": True},
+            "security_actions": {"vpn": {"enabled": True}, "clipboard": {"enabled": True}},
+            "dashboard": {"enabled": True, "auto_refresh_seconds": 2}
+        }
+    
+    def get(self, key_path, default=None):
+        """Get configuration value using dot notation (e.g., 'system.web_port')"""
+        keys = key_path.split('.')
+        value = self.config
+        
+        for key in keys:
+            if isinstance(value, dict) and key in value:
+                value = value[key]
+            else:
+                return default
+        
+        return value
+    
+    def save_config(self):
+        """Save current configuration to file"""
+        try:
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                json.dump(self.config, f, indent=2)
+            print(f"✅ Configuration saved to {self.config_file}")
+        except Exception as e:
+            print(f"❌ Error saving config: {e}")
+
+# Global configuration manager
+config = ConfigManager()
+
 class DPSMonitor:
+    """Main monitoring class that coordinates all security monitoring"""
+    
     def __init__(self):
         self.events = []
-        self.max_events = 1000
+        self.max_events = config.get('system.max_events', 1000)
         self.current_zone = "zone1"
-        self.zones = {
+        
+        # Load zones from config
+        self.zones = config.get('security_zones', {
             "zone1": {"name": "Normal", "color": "green"},
             "zone2": {"name": "Sensitive", "color": "orange"}, 
             "zone3": {"name": "Ultra", "color": "red"}
-        }
-        self.rules = self.load_rules()
+        })
+        
         self.running = True
         self.stats = {
             "events_processed": 0,
@@ -59,31 +127,20 @@ class DPSMonitor:
             "start_time": datetime.now()
         }
         
-    def load_rules(self):
-        """Load rules from schema or use defaults"""
-        try:
-            with open('schema/ruleSchema.json', 'r') as f:
-                return json.load(f)
-        except:
-            return {
-                "zones": self.zones,
-                "edges": [
-                    {
-                        "from": "zone1", "to": "zone2",
-                        "trigger": "openSensitiveUrl",
-                        "conditions": {"urlPattern": ["*.bank.com", "*.payments.*"]},
-                        "actions": ["enableVpn", "lockClipboard"],
-                        "priority": 100
-                    },
-                    {
-                        "from": "*", "to": "zone3", 
-                        "trigger": "usbPlugged",
-                        "conditions": {"deviceClass": ["mass_storage"]},
-                        "actions": ["remountHomeRo", "notifyUser"],
-                        "priority": 90
-                    }
-                ]
-            }
+        # USB tracking for persistent Ultra mode
+        self.connected_usb_devices = set()
+        self.ultra_mode_locked = False
+        
+        # Clipboard monitoring
+        self.clipboard_blocked = False
+        self.clipboard_monitor_thread = None
+        
+        # Load financial keywords from config
+        self.bank_url_patterns = config.get('url_monitoring.financial_keywords', [
+            'bank', 'banking', 'finance', 'payment', 'paypal', 'login'
+        ])
+        
+        print(f"🔧 DPS Monitor initialized with {len(self.bank_url_patterns)} financial keywords")
     
     def add_event(self, event_type, data, action_taken=None):
         """Add event to monitoring log"""
@@ -99,44 +156,26 @@ class DPSMonitor:
             self.events.pop()
         self.stats["events_processed"] += 1
         
-    def evaluate_rules(self, trigger, event_data):
-        """Evaluate rules and return matching edge"""
-        candidates = []
-        for edge in self.rules.get('edges', []):
-            if edge['trigger'] != trigger:
-                continue
-                
-            # Check conditions
-            conditions = edge.get('conditions', {})
-            if 'urlPattern' in conditions and 'url' in event_data:
-                url = event_data['url']
-                if not any(pattern.replace('*', '') in url for pattern in conditions['urlPattern']):
-                    continue
-                    
-            candidates.append(edge)
-            
-        if not candidates:
-            return None
-            
-        # Sort by priority
-        candidates.sort(key=lambda e: e.get('priority', 0), reverse=True)
-        return candidates[0]
+        if config.get('system.debug_mode', False):
+            print(f"📝 Event: {event_type} - {data}")
     
     def execute_actions(self, actions):
-        """Execute security actions"""
+        """Execute security actions based on configuration"""
         results = []
         for action in actions:
             try:
-                if action == "enableVpn":
+                if action == "enableVpn" and config.get('security_actions.vpn.enabled', True):
                     result = self.enable_vpn()
-                elif action == "lockClipboard":
+                elif action == "lockClipboard" and config.get('security_actions.clipboard.enabled', True):
                     result = self.lock_clipboard()
-                elif action == "remountHomeRo":
+                elif action == "unlockClipboard":
+                    result = self.unlock_clipboard()
+                elif action == "remountHomeRo" and config.get('security_actions.filesystem.enabled', True):
                     result = self.remount_home_ro()
-                elif action == "notifyUser":
+                elif action == "notifyUser" and config.get('security_actions.notifications.enabled', True):
                     result = self.notify_user()
                 else:
-                    result = f"Unknown action: {action}"
+                    result = f"Action {action} disabled or unknown"
                     
                 results.append(f"{action}: {result}")
                 self.stats["actions_executed"] += 1
@@ -146,83 +185,171 @@ class DPSMonitor:
         return results
     
     def enable_vpn(self):
-        """Enable VPN connection"""
+        """Enable VPN connection - cross-platform"""
         try:
             if IS_LINUX:
-                result = subprocess.run(['nmcli', 'connection', 'up', 'dps-vpn'], 
-                                      capture_output=True, text=True, timeout=10)
-                return "VPN enabled" if result.returncode == 0 else f"VPN failed: {result.stderr}"
+                cmd = config.get('security_actions.vpn.linux_command', ['nmcli', 'connection', 'up', 'dps-vpn'])
+                timeout = config.get('security_actions.vpn.timeout_seconds', 10)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+                return "VPN enabled (Linux)" if result.returncode == 0 else f"VPN failed: {result.stderr}"
             elif IS_WINDOWS:
-                # Windows VPN control would require different approach
-                return "VPN control not implemented for Windows"
+                cmd = config.get('security_actions.vpn.windows_command', 'echo VPN control not implemented for Windows')
+                result = subprocess.run(['powershell', '-command', cmd], capture_output=True, text=True)
+                return "VPN command executed (Windows)"
+            elif IS_MACOS:
+                return "VPN control not implemented for macOS"
             else:
                 return "VPN control not available on this platform"
         except Exception as e:
             return f"VPN error: {str(e)}"
     
     def lock_clipboard(self):
-        """Lock clipboard by clearing it"""
+        """Lock clipboard by clearing it - cross-platform"""
         try:
             if IS_LINUX:
-                subprocess.run(['xsel', '--clear'], check=False)
-                return "Clipboard locked (Linux)"
+                cmd = config.get('security_actions.clipboard.linux_command', ['xsel', '--clear'])
+                subprocess.run(cmd, check=False, timeout=5)
+                result = "Clipboard locked (Linux)"
             elif IS_WINDOWS:
-                # Windows clipboard clearing
-                import win32clipboard
-                win32clipboard.OpenClipboard()
-                win32clipboard.EmptyClipboard()
-                win32clipboard.CloseClipboard()
-                return "Clipboard locked (Windows)"
+                cmd = config.get('security_actions.clipboard.windows_powershell', 'Set-Clipboard -Value ""')
+                subprocess.run(['powershell', '-command', cmd], check=False, capture_output=True, timeout=5)
+                result = "Clipboard locked (Windows)"
+            elif IS_MACOS:
+                subprocess.run(['pbcopy'], input='', text=True, check=False, timeout=5)
+                result = "Clipboard locked (macOS)"
             else:
-                return "Clipboard lock not available"
-        except ImportError:
-            # Fallback for Windows without pywin32
-            try:
-                import subprocess
-                subprocess.run(['powershell', '-command', 'Set-Clipboard', '-Value', '""'], 
-                              check=False, capture_output=True)
-                return "Clipboard locked (PowerShell)"
-            except:
-                return "Clipboard lock failed"
+                result = "Clipboard lock not available"
+            
+            # Start continuous monitoring if enabled and in Ultra mode
+            if (config.get('clipboard_protection.continuous_clear_in_ultra', True) and 
+                self.current_zone == "zone3"):
+                self.clipboard_blocked = True
+                self.start_clipboard_monitor()
+                result += " + Continuous monitoring enabled"
+            
+            return result
         except Exception as e:
             return f"Clipboard lock error: {str(e)}"
     
+    def unlock_clipboard(self):
+        """Stop clipboard monitoring"""
+        self.clipboard_blocked = False
+        if self.clipboard_monitor_thread:
+            self.clipboard_monitor_thread = None
+        return "Clipboard monitoring stopped"
+    
+    def start_clipboard_monitor(self):
+        """Start continuous clipboard monitoring thread"""
+        if (self.clipboard_monitor_thread and self.clipboard_monitor_thread.is_alive() or
+            not config.get('clipboard_protection.enabled', True)):
+            return
+            
+        def monitor_clipboard():
+            interval = config.get('clipboard_protection.clear_interval_seconds', 2)
+            while self.clipboard_blocked and self.running:
+                try:
+                    if IS_WINDOWS:
+                        cmd = config.get('security_actions.clipboard.windows_powershell', 'Set-Clipboard -Value ""')
+                        subprocess.run(['powershell', '-command', cmd], check=False, capture_output=True, timeout=5)
+                    elif IS_LINUX:
+                        cmd = config.get('security_actions.clipboard.linux_command', ['xsel', '--clear'])
+                        subprocess.run(cmd, check=False, timeout=5)
+                    elif IS_MACOS:
+                        subprocess.run(['pbcopy'], input='', text=True, check=False, timeout=5)
+                    
+                    time.sleep(interval)
+                except Exception as e:
+                    if config.get('system.debug_mode', False):
+                        print(f"Clipboard monitor error: {e}")
+                    time.sleep(5)
+        
+        self.clipboard_monitor_thread = threading.Thread(target=monitor_clipboard, daemon=True)
+        self.clipboard_monitor_thread.start()
+    
+    def stop_clipboard_monitor(self):
+        """Stop clipboard monitoring"""
+        self.clipboard_blocked = False
+        if self.clipboard_monitor_thread:
+            self.clipboard_monitor_thread = None
+    
     def remount_home_ro(self):
-        """Remount home directory as read-only"""
+        """Remount home directory as read-only (Linux only)"""
         try:
             if IS_LINUX:
-                result = subprocess.run(['mount', '-o', 'remount,ro', '/home'], 
-                                      capture_output=True, text=True)
+                cmd = config.get('security_actions.filesystem.linux_remount_ro', ['mount', '-o', 'remount,ro', '/home'])
+                result = subprocess.run(cmd, capture_output=True, text=True)
                 return "Home remounted RO" if result.returncode == 0 else "Remount failed"
             elif IS_WINDOWS:
-                return "Filesystem remounting not applicable on Windows"
+                return config.get('security_actions.filesystem.windows_note', 'Filesystem remounting not applicable on Windows')
+            elif IS_MACOS:
+                return "Filesystem remounting not implemented for macOS"
             else:
                 return "Filesystem remounting not available"
         except Exception as e:
             return f"Remount error: {str(e)}"
     
     def notify_user(self):
-        """Send desktop notification"""
+        """Send desktop notification - cross-platform"""
         try:
             if IS_LINUX:
-                subprocess.run(['notify-send', 'DPS-OS', 'Security zone transition detected'], 
-                              check=False)
+                cmd = config.get('security_actions.notifications.linux_command', 
+                               ['notify-send', 'DPS-OS', 'Security zone transition detected'])
+                subprocess.run(cmd, check=False, timeout=5)
                 return "User notified (Linux)"
             elif IS_WINDOWS:
-                # Windows notification using PowerShell
-                subprocess.run([
-                    'powershell', '-command',
-                    'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show("Security zone transition detected", "DPS-OS")'
-                ], check=False, capture_output=True)
+                cmd = config.get('security_actions.notifications.windows_powershell',
+                               "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Security zone transition detected', 'DPS-OS')")
+                subprocess.run(['powershell', '-command', cmd], check=False, capture_output=True, timeout=10)
                 return "User notified (Windows)"
+            elif IS_MACOS:
+                subprocess.run(['osascript', '-e', 'display notification "Security zone transition detected" with title "DPS-OS"'], 
+                              check=False, timeout=5)
+                return "User notified (macOS)"
             else:
                 return "Notification sent (fallback)"
         except Exception as e:
             return f"Notification error: {str(e)}"
     
+    def detect_bank_url(self, url):
+        """Enhanced bank URL detection using configuration"""
+        if not config.get('url_monitoring.enabled', True):
+            return False
+            
+        url_lower = url.lower()
+        
+        # Check financial keywords from config
+        keywords = config.get('url_monitoring.financial_keywords', self.bank_url_patterns)
+        for pattern in keywords:
+            if pattern in url_lower:
+                return True
+        
+        # Check financial domains from config
+        domains = config.get('url_monitoring.financial_domains', ['.bank', '.finance', '.pay'])
+        for domain in domains:
+            if domain in url_lower:
+                return True
+        
+        # Check for HTTPS secure login pages
+        if 'https://' in url_lower and ('login' in url_lower or 'signin' in url_lower or 'account' in url_lower):
+            return True
+            
+        return False
+    
     def transition_zone(self, new_zone, reason):
-        """Transition to new security zone"""
+        """Transition to new security zone with Ultra mode lock protection"""
         old_zone = self.current_zone
+        
+        # Prevent leaving Ultra mode if USB devices are still connected
+        if self.ultra_mode_locked and old_zone == "zone3" and new_zone != "zone3":
+            if self.connected_usb_devices:
+                self.add_event("zone_transition_blocked", {
+                    "attempted_from": old_zone,
+                    "attempted_to": new_zone,
+                    "reason": "Ultra mode locked - USB devices still connected",
+                    "connected_devices": list(self.connected_usb_devices)
+                })
+                return  # Block the transition
+        
         self.current_zone = new_zone
         self.stats["zone_transitions"] += 1
         self.add_event("zone_transition", {
@@ -230,6 +357,14 @@ class DPSMonitor:
             "to": new_zone,
             "reason": reason
         })
+        
+        # Start clipboard monitoring if entering Ultra mode
+        if new_zone == "zone3":
+            self.clipboard_blocked = True
+            self.start_clipboard_monitor()
+        elif old_zone == "zone3" and new_zone != "zone3":
+            # Stop clipboard monitoring when leaving Ultra mode
+            self.stop_clipboard_monitor()
 
 class USBMonitor:
     def __init__(self, dps_monitor):
@@ -260,21 +395,45 @@ class USBMonitor:
                     break
                     
                 if device.action == 'add':
+                    device_id = device.sys_name
+                    self.dps_monitor.connected_usb_devices.add(device_id)
                     device_info = {
                         "sysName": device.sys_name,
                         "devNode": device.device_node,
                         "deviceClass": "mass_storage",
-                        "platform": "linux"
+                        "platform": "linux",
+                        "action": "plugged"
                     }
                     
                     self.dps_monitor.add_event("usb_plugged", device_info)
                     
-                    # Evaluate rules
-                    edge = self.dps_monitor.evaluate_rules("usbPlugged", device_info)
-                    if edge:
-                        actions = self.dps_monitor.execute_actions(edge.get('actions', []))
-                        self.dps_monitor.transition_zone(edge['to'], f"USB device: {device.sys_name}")
-                        self.dps_monitor.add_event("rule_triggered", edge, actions)
+                    # Force transition to Ultra mode and lock it
+                    self.dps_monitor.transition_zone("zone3", f"USB device plugged: {device.sys_name}")
+                    self.dps_monitor.ultra_mode_locked = True
+                    
+                    # Execute security actions
+                    actions = self.dps_monitor.execute_actions(["lockClipboard", "remountHomeRo", "notifyUser"])
+                    self.dps_monitor.add_event("security_lockdown", {"reason": "USB detected", "actions": actions})
+                
+                elif device.action == 'remove':
+                    device_id = device.sys_name
+                    if device_id in self.dps_monitor.connected_usb_devices:
+                        self.dps_monitor.connected_usb_devices.remove(device_id)
+                        device_info = {
+                            "sysName": device.sys_name,
+                            "deviceClass": "mass_storage",
+                            "platform": "linux",
+                            "action": "removed"
+                        }
+                        
+                        self.dps_monitor.add_event("usb_removed", device_info)
+                        
+                        # Check if all USB devices are removed
+                        if not self.dps_monitor.connected_usb_devices:
+                            self.dps_monitor.ultra_mode_locked = False
+                            self.dps_monitor.stop_clipboard_monitor()
+                            self.dps_monitor.transition_zone("zone1", "All USB devices removed - returning to Normal")
+                            self.dps_monitor.add_event("security_unlock", {"reason": "No USB devices connected"})
         
         thread = threading.Thread(target=monitor_usb, daemon=True)
         thread.start()
@@ -288,6 +447,7 @@ class USBMonitor:
             for partition in psutil.disk_partitions():
                 if 'removable' in partition.opts:
                     seen_drives.add(partition.device)
+                    self.dps_monitor.connected_usb_devices.add(partition.device)
             
             while self.dps_monitor.running:
                 try:
@@ -296,22 +456,47 @@ class USBMonitor:
                         if 'removable' in partition.opts:
                             current_drives.add(partition.device)
                     
+                    # Handle new USB devices (plugged in)
                     new_drives = current_drives - seen_drives
                     for drive in new_drives:
+                        self.dps_monitor.connected_usb_devices.add(drive)
                         device_info = {
                             "device": drive,
                             "deviceClass": "mass_storage",
-                            "platform": "windows"
+                            "platform": "windows",
+                            "action": "plugged"
                         }
                         
                         self.dps_monitor.add_event("usb_plugged", device_info)
                         
-                        # Evaluate rules
-                        edge = self.dps_monitor.evaluate_rules("usbPlugged", device_info)
-                        if edge:
-                            actions = self.dps_monitor.execute_actions(edge.get('actions', []))
-                            self.dps_monitor.transition_zone(edge['to'], f"USB device: {drive}")
-                            self.dps_monitor.add_event("rule_triggered", edge, actions)
+                        # Force transition to Ultra mode and lock it
+                        self.dps_monitor.transition_zone("zone3", f"USB device plugged: {drive}")
+                        self.dps_monitor.ultra_mode_locked = True
+                        
+                        # Execute security actions
+                        actions = self.dps_monitor.execute_actions(["lockClipboard", "notifyUser"])
+                        self.dps_monitor.add_event("security_lockdown", {"reason": "USB detected", "actions": actions})
+                    
+                    # Handle removed USB devices (unplugged)
+                    removed_drives = seen_drives - current_drives
+                    for drive in removed_drives:
+                        if drive in self.dps_monitor.connected_usb_devices:
+                            self.dps_monitor.connected_usb_devices.remove(drive)
+                            device_info = {
+                                "device": drive,
+                                "deviceClass": "mass_storage",
+                                "platform": "windows",
+                                "action": "removed"
+                            }
+                            
+                            self.dps_monitor.add_event("usb_removed", device_info)
+                            
+                            # Check if all USB devices are removed
+                            if not self.dps_monitor.connected_usb_devices:
+                                self.dps_monitor.ultra_mode_locked = False
+                                self.dps_monitor.stop_clipboard_monitor()
+                                self.dps_monitor.transition_zone("zone1", "All USB devices removed - returning to Normal")
+                                self.dps_monitor.add_event("security_unlock", {"reason": "No USB devices connected"})
                     
                     seen_drives = current_drives
                     time.sleep(2)  # Check every 2 seconds
@@ -451,6 +636,57 @@ class NetworkMonitor:
         thread.start()
         return thread
 
+class URLMonitor:
+    def __init__(self, dps_monitor):
+        self.dps_monitor = dps_monitor
+        self.monitored_processes = ['chrome.exe', 'firefox.exe', 'msedge.exe', 'iexplore.exe', 'chrome', 'firefox', 'chromium']
+        
+    def start_monitoring(self):
+        """Monitor browser processes for bank-related URLs"""
+        def monitor_urls():
+            while self.dps_monitor.running:
+                try:
+                    # Monitor browser processes
+                    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                        proc_name = proc.info['name'].lower()
+                        
+                        # Check if it's a browser process
+                        if any(browser in proc_name for browser in self.monitored_processes):
+                            cmdline = ' '.join(proc.info['cmdline'] or [])
+                            
+                            # Look for URLs in command line arguments
+                            if 'http' in cmdline.lower():
+                                urls = self.extract_urls_from_cmdline(cmdline)
+                                for url in urls:
+                                    if self.dps_monitor.detect_bank_url(url):
+                                        self.dps_monitor.add_event("bank_url_detected", {
+                                            "url": url,
+                                            "browser": proc_name,
+                                            "pid": proc.info['pid']
+                                        })
+                                        
+                                        # Transition to Sensitive mode for bank URLs
+                                        if not self.dps_monitor.ultra_mode_locked:
+                                            self.dps_monitor.transition_zone("zone2", f"Bank URL detected: {url}")
+                                            actions = self.dps_monitor.execute_actions(["enableVpn", "lockClipboard", "notifyUser"])
+                                            self.dps_monitor.add_event("bank_security_activated", {"url": url, "actions": actions})
+                    
+                    time.sleep(5)  # Check every 5 seconds
+                except Exception as e:
+                    print(f"URL monitoring error: {e}")
+                    time.sleep(10)
+        
+        thread = threading.Thread(target=monitor_urls, daemon=True)
+        thread.start()
+        return thread
+    
+    def extract_urls_from_cmdline(self, cmdline):
+        """Extract URLs from command line arguments"""
+        import re
+        url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+        urls = re.findall(url_pattern, cmdline, re.IGNORECASE)
+        return urls
+
 # Flask Web Interface
 app = Flask(__name__)
 dps_monitor = DPSMonitor()
@@ -465,6 +701,9 @@ def api_status():
     return jsonify({
         "current_zone": dps_monitor.current_zone,
         "zone_info": dps_monitor.zones[dps_monitor.current_zone],
+        "ultra_mode_locked": dps_monitor.ultra_mode_locked,
+        "connected_usb_devices": list(dps_monitor.connected_usb_devices),
+        "clipboard_blocked": dps_monitor.clipboard_blocked,
         "stats": {
             **dps_monitor.stats,
             "uptime_seconds": int(uptime.total_seconds())
@@ -481,10 +720,6 @@ def api_events():
     limit = request.args.get('limit', 50, type=int)
     return jsonify(dps_monitor.events[:limit])
 
-@app.route('/api/rules')
-def api_rules():
-    return jsonify(dps_monitor.rules)
-
 @app.route('/api/simulate_event', methods=['POST'])
 def api_simulate_event():
     """Simulate an event for testing"""
@@ -493,242 +728,31 @@ def api_simulate_event():
     event_data = data.get('data', {})
     
     if event_type == 'usb':
-        edge = dps_monitor.evaluate_rules("usbPlugged", event_data)
-        if edge:
-            actions = dps_monitor.execute_actions(edge.get('actions', []))
-            dps_monitor.transition_zone(edge['to'], "Simulated USB event")
-            dps_monitor.add_event("simulated_usb", event_data, actions)
+        # Simulate USB device connection
+        dps_monitor.connected_usb_devices.add(event_data.get('device', 'test_usb'))
+        dps_monitor.transition_zone("zone3", "Simulated USB event")
+        dps_monitor.ultra_mode_locked = True
+        actions = dps_monitor.execute_actions(["lockClipboard", "notifyUser"])
+        dps_monitor.add_event("simulated_usb", event_data, actions)
     elif event_type == 'url':
-        edge = dps_monitor.evaluate_rules("openSensitiveUrl", event_data)
-        if edge:
-            actions = dps_monitor.execute_actions(edge.get('actions', []))
-            dps_monitor.transition_zone(edge['to'], f"Sensitive URL: {event_data.get('url')}")
-            dps_monitor.add_event("simulated_url", event_data, actions)
+        # Simulate bank URL detection
+        url = event_data.get('url', '')
+        if dps_monitor.detect_bank_url(url):
+            if not dps_monitor.ultra_mode_locked:
+                dps_monitor.transition_zone("zone2", f"Simulated bank URL: {url}")
+            actions = dps_monitor.execute_actions(["enableVpn", "lockClipboard", "notifyUser"])
+            dps_monitor.add_event("simulated_bank_url", event_data, actions)
     
     return jsonify({"status": "success"})
 
-def create_html_template():
-    """Create the dashboard HTML template"""
-    os.makedirs('templates', exist_ok=True)
-    
-    html_content = '''<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DPS-OS Monitor</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a1a; color: #fff; }
-        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-        .header { text-align: center; margin-bottom: 30px; }
-        .header h1 { color: #00ff88; font-size: 2.5em; margin-bottom: 10px; }
-        .status-bar { display: flex; justify-content: space-between; background: #2a2a2a; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
-        .zone-indicator { padding: 10px 20px; border-radius: 5px; font-weight: bold; }
-        .zone-normal { background: #28a745; }
-        .zone-sensitive { background: #fd7e14; }
-        .zone-ultra { background: #dc3545; }
-        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }
-        .stat-card { background: #2a2a2a; padding: 15px; border-radius: 8px; text-align: center; }
-        .stat-value { font-size: 2em; font-weight: bold; color: #00ff88; }
-        .stat-label { color: #ccc; margin-top: 5px; }
-        .events-section { background: #2a2a2a; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-        .events-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
-        .event-item { background: #3a3a3a; padding: 10px; margin-bottom: 10px; border-radius: 5px; border-left: 4px solid #00ff88; }
-        .event-timestamp { color: #888; font-size: 0.9em; }
-        .event-type { color: #00ff88; font-weight: bold; }
-        .event-data { color: #ccc; margin-top: 5px; }
-        .controls { background: #2a2a2a; padding: 20px; border-radius: 8px; }
-        .btn { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; margin: 5px; }
-        .btn:hover { background: #0056b3; }
-        .btn-danger { background: #dc3545; }
-        .btn-danger:hover { background: #c82333; }
-        .system-info { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-top: 15px; }
-        .progress-bar { background: #444; height: 20px; border-radius: 10px; overflow: hidden; }
-        .progress-fill { height: 100%; background: linear-gradient(90deg, #28a745, #ffc107, #dc3545); transition: width 0.3s; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🛡️ DPS-OS Monitor</h1>
-            <p>Dynamic Privacy-Shifting Operating System</p>
-        </div>
-        
-        <div class="status-bar">
-            <div>
-                <strong>Current Zone:</strong>
-                <span id="current-zone" class="zone-indicator">Loading...</span>
-            </div>
-            <div>
-                <strong>Uptime:</strong> <span id="uptime">0s</span>
-            </div>
-            <div>
-                <strong>Status:</strong> <span style="color: #00ff88;">● Active</span>
-            </div>
-        </div>
-        
-        <div class="stats">
-            <div class="stat-card">
-                <div class="stat-value" id="events-count">0</div>
-                <div class="stat-label">Events Processed</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value" id="transitions-count">0</div>
-                <div class="stat-label">Zone Transitions</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value" id="actions-count">0</div>
-                <div class="stat-label">Actions Executed</div>
-            </div>
-        </div>
-        
-        <div class="system-info">
-            <div class="stat-card">
-                <div class="stat-label">CPU Usage</div>
-                <div class="progress-bar">
-                    <div class="progress-fill" id="cpu-progress"></div>
-                </div>
-                <div id="cpu-percent">0%</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Memory Usage</div>
-                <div class="progress-bar">
-                    <div class="progress-fill" id="memory-progress"></div>
-                </div>
-                <div id="memory-percent">0%</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Disk Usage</div>
-                <div class="progress-bar">
-                    <div class="progress-fill" id="disk-progress"></div>
-                </div>
-                <div id="disk-percent">0%</div>
-            </div>
-        </div>
-        
-        <div class="events-section">
-            <div class="events-header">
-                <h3>Recent Events</h3>
-                <button class="btn" onclick="refreshEvents()">Refresh</button>
-            </div>
-            <div id="events-list">Loading events...</div>
-        </div>
-        
-        <div class="controls">
-            <h3>Test Controls</h3>
-            <button class="btn" onclick="simulateUSB()">Simulate USB Event</button>
-            <button class="btn" onclick="simulateURL()">Simulate Banking URL</button>
-            <button class="btn btn-danger" onclick="clearEvents()">Clear Events</button>
-        </div>
-    </div>
-
-    <script>
-        function updateStatus() {
-            fetch('/api/status')
-                .then(response => response.json())
-                .then(data => {
-                    const zone = data.current_zone;
-                    const zoneElement = document.getElementById('current-zone');
-                    zoneElement.textContent = data.zone_info.name;
-                    zoneElement.className = 'zone-indicator zone-' + data.zone_info.color;
-                    
-                    document.getElementById('uptime').textContent = formatUptime(data.stats.uptime_seconds);
-                    document.getElementById('events-count').textContent = data.stats.events_processed;
-                    document.getElementById('transitions-count').textContent = data.stats.zone_transitions;
-                    document.getElementById('actions-count').textContent = data.stats.actions_executed;
-                    
-                    updateProgressBar('cpu', data.system_info.cpu_percent);
-                    updateProgressBar('memory', data.system_info.memory_percent);
-                    updateProgressBar('disk', data.system_info.disk_percent);
-                });
-        }
-        
-        function updateProgressBar(type, percent) {
-            document.getElementById(type + '-progress').style.width = percent + '%';
-            document.getElementById(type + '-percent').textContent = percent.toFixed(1) + '%';
-        }
-        
-        function formatUptime(seconds) {
-            const hours = Math.floor(seconds / 3600);
-            const minutes = Math.floor((seconds % 3600) / 60);
-            const secs = seconds % 60;
-            return hours + 'h ' + minutes + 'm ' + secs + 's';
-        }
-        
-        function refreshEvents() {
-            fetch('/api/events?limit=20')
-                .then(response => response.json())
-                .then(events => {
-                    const eventsList = document.getElementById('events-list');
-                    if (events.length === 0) {
-                        eventsList.innerHTML = '<p>No events yet</p>';
-                        return;
-                    }
-                    
-                    eventsList.innerHTML = events.map(event => `
-                        <div class="event-item">
-                            <div class="event-timestamp">${new Date(event.timestamp).toLocaleString()}</div>
-                            <div class="event-type">${event.type}</div>
-                            <div class="event-data">${JSON.stringify(event.data)}</div>
-                            ${event.action ? '<div class="event-data">Actions: ' + JSON.stringify(event.action) + '</div>' : ''}
-                        </div>
-                    `).join('');
-                });
-        }
-        
-        function simulateUSB() {
-            fetch('/api/simulate_event', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    type: 'usb',
-                    data: {sysName: 'test_usb', deviceClass: 'mass_storage'}
-                })
-            }).then(() => {
-                setTimeout(refreshEvents, 500);
-                setTimeout(updateStatus, 500);
-            });
-        }
-        
-        function simulateURL() {
-            fetch('/api/simulate_event', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    type: 'url',
-                    data: {url: 'https://test.bank.com/login'}
-                })
-            }).then(() => {
-                setTimeout(refreshEvents, 500);
-                setTimeout(updateStatus, 500);
-            });
-        }
-        
-        function clearEvents() {
-            if (confirm('Clear all events?')) {
-                // This would need a backend endpoint
-                location.reload();
-            }
-        }
-        
-        // Auto-refresh every 2 seconds
-        setInterval(updateStatus, 2000);
-        setInterval(refreshEvents, 5000);
-        
-        // Initial load
-        updateStatus();
-        refreshEvents();
-    </script>
-</body>
-</html>'''
-    
-    with open('templates/dashboard.html', 'w', encoding='utf-8') as f:
-        f.write(html_content)
-
 def main():
     """Main application entry point"""
-    print("🛡️  DPS-OS Unified Monitor Starting...")
+    print("🛡️  DPS-OS Cross-Platform Monitor Starting...")
+    print(f"🖥️  Platform: {platform.system()} {platform.release()}")
+    print(f"🐍 Python: {platform.python_version()}")
+    
+    # Load configuration
+    print(f"⚙️  Configuration: {len(config.config)} sections loaded")
     
     # Check if running with appropriate privileges
     if IS_LINUX:
@@ -736,65 +760,97 @@ def main():
             print("⚠️  Warning: Not running as root. Some features may not work.")
             print("   Run with: sudo python3 dps_app.py")
     elif IS_WINDOWS:
-        import ctypes
-        if not ctypes.windll.shell32.IsUserAnAdmin():
-            print("⚠️  Warning: Not running as Administrator. Some features may not work.")
-            print("   Run Command Prompt as Administrator and try again.")
+        try:
+            import ctypes
+            if not ctypes.windll.shell32.IsUserAnAdmin():
+                print("⚠️  Warning: Not running as Administrator. Some features may not work.")
+                print("   Run Command Prompt as Administrator and try again.")
+        except:
+            print("⚠️  Could not check Administrator status")
+    elif IS_MACOS:
+        print("🍎 macOS detected - some features may require additional permissions")
     
-    # Create HTML template
-    create_html_template()
+    # Initialize monitors based on configuration
+    monitors = []
     
-    # Initialize monitors
-    usb_monitor = USBMonitor(dps_monitor)
-    process_monitor = ProcessMonitor(dps_monitor)
-    network_monitor = NetworkMonitor(dps_monitor)
+    if config.get('usb_monitoring.enabled', True):
+        print("🔍 Starting USB monitoring...")
+        usb_monitor = USBMonitor(dps_monitor)
+        monitors.append(('USB', usb_monitor))
     
-    # Start monitoring threads
-    print("🔍 Starting USB monitoring...")
-    usb_monitor.start_monitoring()
+    if config.get('process_monitoring.enabled', True):
+        print("🔍 Starting process monitoring...")
+        process_monitor = ProcessMonitor(dps_monitor)
+        monitors.append(('Process', process_monitor))
     
-    print("🔍 Starting process monitoring...")
-    process_monitor.start_monitoring()
+    if config.get('network_monitoring.enabled', True):
+        print("🔍 Starting network monitoring...")
+        network_monitor = NetworkMonitor(dps_monitor)
+        monitors.append(('Network', network_monitor))
     
-    print("🔍 Starting network monitoring...")
-    network_monitor.start_monitoring()
+    if config.get('url_monitoring.enabled', True):
+        print("� StarSting URL monitoring...")
+        url_monitor = URLMonitor(dps_monitor)
+        monitors.append(('URL', url_monitor))
+    
+    # Start all enabled monitors
+    for name, monitor in monitors:
+        try:
+            monitor.start_monitoring()
+            print(f"✅ {name} monitor started")
+        except Exception as e:
+            print(f"❌ {name} monitor failed to start: {e}")
     
     # Handle shutdown gracefully
     def signal_handler(sig, frame):
         print("\n🛑 Shutting down DPS-OS Monitor...")
         dps_monitor.running = False
+        dps_monitor.stop_clipboard_monitor()
         sys.exit(0)
     
     signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    if hasattr(signal, 'SIGTERM'):  # Not available on Windows
+        signal.signal(signal.SIGTERM, signal_handler)
     
     # Start web server with fallback ports
-    ports_to_try = [5000, 5001, 8081, 8082, 3000]
-    server_started = False
-    
-    for port in ports_to_try:
+    if config.get('dashboard.enabled', True):
+        ports_to_try = [
+            config.get('system.web_port', 5000),
+            5001, 8081, 8082, 3000
+        ]
+        server_started = False
+        
+        for port in ports_to_try:
+            try:
+                print(f"🌐 Trying to start web dashboard on http://localhost:{port}")
+                print("📊 Open your browser to view the monitoring dashboard")
+                print("🔧 Use Ctrl+C to stop")
+                app.run(host='127.0.0.1', port=port, debug=config.get('system.debug_mode', False), threaded=True)
+                server_started = True
+                break
+            except OSError as e:
+                if "Address already in use" in str(e) or "access" in str(e).lower():
+                    print(f"⚠️  Port {port} is not available, trying next port...")
+                    continue
+                else:
+                    print(f"❌ Error starting web server on port {port}: {e}")
+                    continue
+            except Exception as e:
+                print(f"❌ Unexpected error starting web server on port {port}: {e}")
+                continue
+        
+        if not server_started:
+            print("❌ Could not start web server on any available port")
+            print("💡 Try running as Administrator or check firewall settings")
+            sys.exit(1)
+    else:
+        print("📊 Dashboard disabled in configuration")
+        print("🔧 Monitoring will continue in background. Use Ctrl+C to stop")
         try:
-            print(f"🌐 Trying to start web dashboard on http://localhost:{port}")
-            print("📊 Open your browser to view the monitoring dashboard")
-            print("🔧 Use Ctrl+C to stop")
-            app.run(host='127.0.0.1', port=port, debug=False, threaded=True)
-            server_started = True
-            break
-        except OSError as e:
-            if "Address already in use" in str(e) or "access" in str(e).lower():
-                print(f"⚠️  Port {port} is not available, trying next port...")
-                continue
-            else:
-                print(f"❌ Error starting web server on port {port}: {e}")
-                continue
-        except Exception as e:
-            print(f"❌ Unexpected error starting web server on port {port}: {e}")
-            continue
-    
-    if not server_started:
-        print("❌ Could not start web server on any available port")
-        print("💡 Try running as Administrator or check firewall settings")
-        sys.exit(1)
+            while dps_monitor.running:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            signal_handler(signal.SIGINT, None)
 
 if __name__ == '__main__':
     main()
